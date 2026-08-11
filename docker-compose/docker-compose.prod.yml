@@ -1,0 +1,152 @@
+# CrewBoard production deployment — docker-compose flavor, routed through an
+# existing Traefik instance managed by the matrix-docker-ansible-deploy
+# playbook (matrix_playbook_reverse_proxy_type: playbook-managed-traefik OR
+# other-traefik-container — either way, Traefik discovers services via
+# Docker labels on containers joined to its shared external network, same
+# pattern the playbook already uses for Synapse/Sygnal/etc: see the
+# `traefik.enable=true` / `traefik.http.routers.*` / `.entrypoints=` /
+# `.tls.certResolver=` label style below, mirrored from this deployment's
+# existing matrix-sygnal container labels).
+#
+# Routes CrewBoard as its own subdomain (CREWBOARD_DOMAIN in .env) rather
+# than path-sharing your homeserver's domain, since this playbook's Traefik
+# usage is one container = one Host() rule. Frontend and backend still need
+# to be SAME-ORIGIN from the browser's point of view (the widget bundle
+# calls its backend at the relative path `/api`, not a configurable URL) —
+# that's handled here by giving both containers a router on the SAME
+# CREWBOARD_DOMAIN Host() rule, with the backend's router additionally
+# matching `PathPrefix(/api)` and an explicit higher `priority` so Traefik
+# never routes an `/api/*` request to the frontend by mistake.
+#
+# No nginx / buffering config needed for the `/api/events` SSE endpoint —
+# unlike nginx, Traefik doesn't buffer proxied responses by default, so
+# server-sent events stream through it with zero extra configuration.
+#
+# Pulls prebuilt images (CREWBOARD_BACKEND_IMAGE/CREWBOARD_FRONTEND_IMAGE in
+# .env, e.g. yourdockerhubuser/crewboard-backend) rather than building
+# locally — build+push these yourself from the root/backend Dockerfiles
+# first (`docker build . -t yourdockerhubuser/crewboard-widget` etc). Backend
+# and frontend are versioned/released independently, so they each get their
+# own version var rather than sharing one — CREWBOARD_BACKEND_VERSION and
+# CREWBOARD_FRONTEND_VERSION in .env, each defaulting to "latest" if unset,
+# e.g. "1.4.0" or a commit sha. To deploy a new version of just one service:
+# push the new tag to your registry, bump that service's version var in
+# .env, then
+#   docker compose -f docker-compose.prod.yml pull backend   # or: frontend
+#   docker compose -f docker-compose.prod.yml up -d backend  # or: frontend
+# `docker compose up -d` alone will NOT fetch a new image for an
+# already-pulled tag — always `pull` first, especially if you ever reuse
+# the "latest" tag rather than a version number.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: crewboard
+      POSTGRES_USER: crewboard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - crewboard_pgdata:/var/lib/postgresql/data
+    # Internal only — not on the `traefik` network, nothing needs to reach
+    # Postgres except the backend, over the private `crewboard` network.
+    networks:
+      - crewboard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crewboard -d crewboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: ${CREWBOARD_BACKEND_IMAGE:?set CREWBOARD_BACKEND_IMAGE in .env, e.g. yourdockerhubuser/crewboard-backend}:${CREWBOARD_BACKEND_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://crewboard:${POSTGRES_PASSWORD}@postgres:5432/crewboard
+      PORT: "4000"
+      # If Synapse's own container is joined to this same `traefik` external
+      # network (likely, in a matrix-docker-ansible-deploy setup — check
+      # with `docker inspect matrix-synapse` or your Synapse service's own
+      # `networks:` block), point this at its container/service name and
+      # INTERNAL port directly over the Docker network — no host port
+      # needed at all, e.g. http://matrix-synapse:8008. Only fall back to
+      # `http://host.docker.internal:<published-port>` (see extra_hosts
+      # below) if Synapse isn't reachable by container name for some reason.
+      SYNAPSE_BASE_URL: ${SYNAPSE_BASE_URL:?set SYNAPSE_BASE_URL in .env, e.g. http://matrix-synapse:8008}
+      # Only set this if your Synapse serves the `client` and `federation`
+      # resources on two different listeners/ports — see .env.example for
+      # the full explanation. Defaults to SYNAPSE_BASE_URL when unset, which
+      # is correct for the common single-listener case.
+      SYNAPSE_FEDERATION_URL: ${SYNAPSE_FEDERATION_URL:-}
+      # Left unset until you mint one — the backend logs a loud warning and
+      # runs in degraded/identity-only auth mode without it (everyone
+      # treated as a writer, no room-membership check). Safe to leave blank
+      # for first boot.
+      SYNAPSE_ADMIN_TOKEN: ${SYNAPSE_ADMIN_TOKEN:-}
+      CREWBOARD_ROOM_ID: ${CREWBOARD_ROOM_ID:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env — see README, and BACK THIS UP}
+    # Only needed if you end up using the host.docker.internal fallback
+    # above instead of reaching Synapse by container name over the shared
+    # `traefik` network — harmless to leave in either way.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - crewboard   # -> postgres
+      - traefik     # -> discoverable by Traefik, and can reach Synapse by container name if it's on this network too
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+      - "traefik.http.routers.crewboard-backend.rule=Host(`${CREWBOARD_DOMAIN:?set CREWBOARD_DOMAIN in .env}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.crewboard-backend.entrypoints=${TRAEFIK_ENTRYPOINT:-web-secure}"
+      - "traefik.http.routers.crewboard-backend.tls=true"
+      - "traefik.http.routers.crewboard-backend.tls.certResolver=${TRAEFIK_CERTRESOLVER:-}"
+      - "traefik.http.routers.crewboard-backend.service=crewboard-backend"
+      # Explicit priority so this PathPrefix-qualified router always wins
+      # over the frontend's plain Host() router below for `/api/*` requests
+      # — Traefik's implicit "longer rule wins" ordering should already
+      # produce this, but pinning it removes any ambiguity.
+      - "traefik.http.routers.crewboard-backend.priority=10"
+      - "traefik.http.services.crewboard-backend.loadbalancer.server.port=4000"
+
+  frontend:
+    image: ${CREWBOARD_FRONTEND_IMAGE:?set CREWBOARD_FRONTEND_IMAGE in .env, e.g. yourdockerhubuser/crewboard-widget}:${CREWBOARD_FRONTEND_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      # Self-hosted Plausible analytics (2026-08-06) — configurable here,
+      # at CONTAINER RUNTIME, without rebuilding the frontend image. The
+      # container's own entrypoint (see /docker-entrypoint.d/40-generate-
+      # env-js.sh at the repo root) templates these into env.js on every
+      # start. Both left unset = analytics stays off (analytics.js's
+      # isEnabled() check) — safe to leave blank until you've set up
+      # Plausible. Every event this app ever sends carries at most a Matrix
+      # room id and/or user id — see analytics.js's header comment.
+      PLAUSIBLE_API_HOST: ${PLAUSIBLE_API_HOST:-}
+      PLAUSIBLE_DOMAIN: ${PLAUSIBLE_DOMAIN:-}
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+      - "traefik.http.routers.crewboard-frontend.rule=Host(`${CREWBOARD_DOMAIN:?set CREWBOARD_DOMAIN in .env}`)"
+      - "traefik.http.routers.crewboard-frontend.entrypoints=${TRAEFIK_ENTRYPOINT:-web-secure}"
+      - "traefik.http.routers.crewboard-frontend.tls=true"
+      - "traefik.http.routers.crewboard-frontend.tls.certResolver=${TRAEFIK_CERTRESOLVER:-}"
+      - "traefik.http.routers.crewboard-frontend.service=crewboard-frontend"
+      - "traefik.http.routers.crewboard-frontend.priority=1"
+      - "traefik.http.services.crewboard-frontend.loadbalancer.server.port=8080"
+
+networks:
+  crewboard:
+    driver: bridge
+  # Pre-existing network Traefik watches (matrix-docker-ansible-deploy's
+  # default name is `traefik`) — created OUTSIDE this compose project by
+  # Traefik's own setup, joined here rather than created.
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}
+
+volumes:
+  crewboard_pgdata:

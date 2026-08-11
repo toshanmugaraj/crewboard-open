@@ -1,0 +1,12 @@
+{
+  "name": "crewboard-matrix-widget",
+  "version": "2.0.0",
+  "description": "Field crew management — Matrix Element Web Widget",
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "preview": "cd frontend && npm run preview",
+    "install:all": "cd frontend && npm install"
+  },
+  "author": "CrewBoard"
+}

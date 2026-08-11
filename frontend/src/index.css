@@ -1,0 +1,343 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Element Web / Compound-inspired palette. CrewBoard runs inside Element as
+ * a widget, so it borrows Element's accent green and corner radii instead of
+ * its old standalone Electron-app look. Variable names are kept the same as
+ * before so every component below just picks up the new values.
+ *
+ * Dark/light split (2026-07-28): this used to be ONE hardcoded dark palette
+ * regardless of Element's actual theme setting — MUI-based components
+ * (Paper, Typography, etc. using theme-aware tokens like `text.secondary`)
+ * correctly followed Element's live theme via MuiThemeProvider, but this
+ * plain CSS (Layout.jsx's shell chrome, Leaflet popup overrides, the
+ * .btn/.toggle/.form-* classes, none of which run through MUI) stayed
+ * frozen to dark, producing exactly the "background/font color mismatch"
+ * users saw when running Element in light mode. `[data-theme]` on <html> is
+ * set by main.jsx's ThemeSync component, which mirrors MuiThemeProvider's
+ * OWN resolved theme (same 'dark' vs everything-else split as its
+ * chooseTheme()) — so this palette switch and MUI's palette switch always
+ * agree, even before considering whether the registration URL passes
+ * Element's real theme through (see main.jsx's ThemeSync comment). */
+:root, [data-theme='dark'] {
+  --bg: #15191e;
+  --surface: #1a1f25;
+  --surface2: #21262c;
+  --surface3: #2a3038;
+  --border: #2d343b;
+  --border2: #384249;
+  --text: #e3e8f0;
+  --muted: #8a97a0;
+  --dim: #5c6670;
+  --accent: #0dbd8b;
+  --accent-bg: #0a3b31;
+  --accent-border: #12594a;
+  --success: #0dbd8b;
+  --success-bg: #0a3b31;
+  --success-border: #12594a;
+  --danger: #ff5b55;
+  --danger-bg: #3a1214;
+  --danger-border: #5c1f21;
+  --warn: #ff9d10;
+  --warn-bg: #3a2a0a;
+  --radius: 8px;
+  --sidebar-w: 50px;
+}
+
+[data-theme='light'] {
+  --bg: #ffffff;
+  --surface: #f4f6fa;
+  --surface2: #e9edf3;
+  --surface3: #dde2ea;
+  --border: #d3d9e0;
+  --border2: #c1c9d3;
+  --text: #1b1f24;
+  --muted: #6a7278;
+  --dim: #8e959b;
+  --accent: #0dbd8b;
+  --accent-bg: #e4f7f0;
+  --accent-border: #9fe0c9;
+  --success: #0a8f68;
+  --success-bg: #e4f7f0;
+  --success-border: #9fe0c9;
+  --danger: #d1302b;
+  --danger-bg: #fce8e7;
+  --danger-border: #f0aeac;
+  --warn: #b6690a;
+  --warn-bg: #fbeedc;
+  --radius: 8px;
+  --sidebar-w: 50px;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  /* Was 13px — MUI's own typography variants (Typography without an
+   * explicit fontSize override) size themselves in `rem` via
+   * pxToRem(px) = px/16 + 'rem' (@matrix-widget-toolkit/mui's own
+   * baseTheme), which assumes a 16px root. A 13px root silently shrank
+   * every MUI-variant text by the same ~19% this was never meant to, on
+   * top of not matching Element's own default root size. Explicit numeric
+   * `fontSize` props used throughout the app's own components (e.g.
+   * `sx={{ fontSize: 12 }}`) are unaffected either way — those are already
+   * absolute px, not relative to this. */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* INPUTS */
+input, textarea, select {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+}
+input::placeholder, textarea::placeholder { color: var(--muted); }
+select option { background: var(--surface2); }
+
+/* BUTTONS */
+button {
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  transition: all 0.15s;
+}
+
+.btn {
+  padding: 7px 14px;
+  border: 1px solid var(--border2);
+  background: var(--surface3);
+  color: var(--muted);
+}
+.btn:hover { background: var(--surface2); color: var(--text); }
+
+.btn-primary {
+  padding: 7px 14px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 500;
+}
+.btn-primary:hover { background: var(--accent); color: #fff; }
+
+.btn-danger {
+  padding: 7px 14px;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.btn-danger:hover { background: var(--danger); color: #fff; }
+
+.btn-success {
+  padding: 7px 14px;
+  border: 1px solid var(--success-border);
+  background: var(--success-bg);
+  color: var(--success);
+}
+.btn-success:hover { background: var(--success); color: #fff; }
+
+/* ICON BUTTONS */
+.icon-btn {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border2);
+  background: var(--surface3);
+  color: var(--muted);
+  border-radius: var(--radius);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.icon-btn:hover { color: var(--text); border-color: var(--border2); background: var(--surface2); }
+
+/* CARD */
+.card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* FORM */
+.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.form-label { font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.form-row { display: flex; gap: 10px; }
+.form-row .form-group { flex: 1; }
+
+/* BADGE */
+.badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* TOGGLE */
+.toggle {
+  width: 32px; height: 17px;
+  background: var(--border2);
+  border-radius: 9px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--accent); }
+.toggle-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+.toggle.on .toggle-thumb { left: 17px; }
+
+/* MODAL OVERLAY */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+.modal {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.modal-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* AVATAR */
+.avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* SECTION TITLE */
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+/* DIVIDER */
+.divider { height: 1px; background: var(--border); margin: 12px 0; }
+
+/* EMPTY STATE */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  text-align: center;
+  gap: 8px;
+}
+.empty-state i { font-size: 32px; color: var(--dim); }
+.empty-state p { font-size: 12px; }
+
+/* NOTIFICATION TOAST */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  font-size: 12px;
+  z-index: 2000;
+  animation: slideUp 0.2s ease;
+}
+.toast.success { border-color: var(--success-border); color: var(--success); }
+.toast.error { border-color: var(--danger-border); color: var(--danger); }
+
+@keyframes slideUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* LEAFLET OVERRIDES */
+.leaflet-container { background: #1a2035 !important; }
+.leaflet-control-zoom a {
+  background: var(--surface2) !important;
+  border-color: var(--border2) !important;
+  color: var(--muted) !important;
+}
+.leaflet-control-zoom a:hover { color: var(--text) !important; }
+.leaflet-control-attribution {
+  background: rgba(15,17,23,0.8) !important;
+  color: var(--dim) !important;
+  font-size: 9px !important;
+}
+.leaflet-control-attribution a { color: var(--dim) !important; }
+.leaflet-popup-content-wrapper {
+  background: var(--surface2) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 10px !important;
+  color: var(--text) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
+}
+.leaflet-popup-tip { background: var(--surface2) !important; }
+.leaflet-popup-close-button { color: var(--muted) !important; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

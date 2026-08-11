@@ -1,0 +1,59 @@
+# ── ONLY relevant if you are NOT using Traefik ──────────────────────────────
+# docker-compose.prod.yml now routes CrewBoard via Traefik labels by default
+# (matrix-docker-ansible-deploy style — see the `traefik.*` labels on the
+# backend/frontend services in that file), since that's this deployment's
+# actual reverse proxy. This nginx snippet is kept as an alternative for
+# anyone using this compose file WITHOUT Traefik.
+#
+# To use this instead: remove the `traefik.*` labels and the `traefik`
+# external network from docker-compose.prod.yml's backend/frontend
+# services, add back `ports: ["127.0.0.1:4000:4000"]` (backend) and
+# `["127.0.0.1:8080:8080"]` (frontend), then drop this into your nginx site
+# config, inside the `server { ... }` block that terminates TLS for your
+# domain (server_name your-crewboard-domain.example.com;).
+#
+# Frontend and backend MUST be reachable at the same origin: the widget
+# bundle calls its own API at the relative path `/api` (no configurable base
+# URL), so anything else (separate subdomain, separate port exposed
+# publicly) will break it with cross-origin failures. (Traefik's labels
+# achieve the same same-origin requirement differently — see
+# docker-compose.prod.yml's header comment.)
+
+# ── Backend API ──────────────────────────────────────────────────────────
+location /api/ {
+    proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# ── Live-updates SSE endpoint (/api/events) ─────────────────────────────
+# Needs its own block ABOVE the generic /api/ block (nginx matches the most
+# specific prefix) — SSE is a long-lived streaming response, and nginx's
+# default proxy buffering + read timeout will silently break it (buffered
+# responses never flush to the client; the connection gets killed by the
+# timeout well before the browser's EventSource would naturally reconnect).
+location /api/events {
+    proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    chunked_transfer_encoding off;
+}
+
+# ── Frontend (everything else) ──────────────────────────────────────────
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
