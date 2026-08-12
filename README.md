@@ -32,7 +32,6 @@ There is no separate login system and no messaging service of CrewBoard's own â€
 - A Matrix homeserver and an Element client (Element Web, Element X, or Element Desktop) to host the widget
 - A room to add the widget to (must have encryption enabled â€” see `CLAUDE.md`)
 
-There is **no Signal / signal-cli dependency of any kind**. All messaging is native Matrix.
 
 ---
 
