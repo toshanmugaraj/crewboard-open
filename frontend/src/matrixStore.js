@@ -840,8 +840,16 @@ const mediaUrlCache = new Map() // key -> Promise<string | null>
  *  `blob:` object URL usable in an <img src>, or null if there's no mxc, no
  *  homeserver base yet, or the fetch fails. Async now (see header comment
  *  above) — callers need a useEffect/useState, not a direct render call;
- *  see Database.jsx's usage. */
-export async function fetchAuthedMediaUrl(mxc, size = 352) {
+ *  see Database.jsx's usage.
+ *
+ *  Default size 96 (not the round-number "352" tried earlier): Synapse only
+ *  generates thumbnails at the fixed sizes listed in its own
+ *  `thumbnail_sizes` config, not arbitrary requested dimensions — a request
+ *  for a size that isn't pre-generated silently gets served the nearest
+ *  size the server actually has on disk instead of a dynamic resize.
+ *  Confirmed against a real deployment that this server's closest available
+ *  size is 96×96, so asking for anything else just wastes a request. */
+export async function fetchAuthedMediaUrl(mxc, size = 96) {
   if (!mxc || !mxc.startsWith('mxc://')) return null
   const cacheKey = `${mxc}:${size}`
   if (mediaUrlCache.has(cacheKey)) return mediaUrlCache.get(cacheKey)
@@ -867,15 +875,34 @@ export async function fetchAuthedMediaUrl(mxc, size = 352) {
  *  host to fetch on its behalf and relay back the Blob (structured-clonable
  *  over BroadcastChannel) — see relay.js's 'fetchMediaUrl' case and
  *  companionFetchMediaUrl(). */
-export async function fetchMediaBlob(mxc, size = 352) {
+export async function fetchMediaBlob(mxc, size = 96) {
   if (!mxc || !mxc.startsWith('mxc://')) return null
   const { access_token, matrix_server_name } = await getOpenIdToken()
   const homeserverUrl = getWidgetUrlParam('baseUrl') || await resolveHomeserverBase(matrix_server_name)
   const path = `/_matrix/client/v1/media/thumbnail/${mxc.slice('mxc://'.length)}`
-  const query = new URLSearchParams({ width: String(size), height: String(size), method: 'crop' })
-  const res = await fetch(`${homeserverUrl.replace(/\/+$/, '')}${path}?${query.toString()}`, {
-    headers: { Authorization: `Bearer ${access_token}` },
-  })
-  if (!res.ok) throw new Error(`Authenticated media fetch failed (${res.status})`)
+  // allow_redirect: lets Synapse redirect straight to the remote homeserver's
+  // own authenticated media endpoint when the mxc:// server-name isn't this
+  // homeserver (e.g. a federated user's avatar) instead of only trying (and
+  // sometimes failing) to proxy-fetch it locally — confirmed necessary
+  // against a real deployment that 404'd on v1/thumbnail without it.
+  const query = new URLSearchParams({ width: String(size), height: String(size), method: 'crop', allow_redirect: 'true' })
+  const url = `${homeserverUrl.replace(/\/+$/, '')}${path}?${query.toString()}`
+
+  // Try unauthenticated first. A widget's OpenID token is NOT a real Matrix
+  // access_token per spec (it's minted for third-party identity
+  // verification — the exact thing backend/src/auth.js uses it for against
+  // the homeserver's federation userinfo endpoint), so a strict/spec-correct
+  // homeserver is right to reject it as media auth. Deployments that serve
+  // media without any auth at all (confirmed on a real production server)
+  // get their thumbnail in one request this way, with no wasted round trip.
+  // Deployments that DO require media auth get a best-effort retry with the
+  // OpenID token below — it isn't guaranteed valid there either, but a
+  // widget has no way to obtain a real access_token, so this is the only
+  // credential available to try.
+  let res = await fetch(url)
+  if (res.status === 401 || res.status === 403) {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${access_token}` } })
+  }
+  if (!res.ok) throw new Error(`Media fetch failed (${res.status})`)
   return res.blob()
 }
