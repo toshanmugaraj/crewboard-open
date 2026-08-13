@@ -39,6 +39,7 @@ import AddMarkerModal from '../components/AddMarkerModal'
 import ScreenshotModal from '../components/ScreenshotModal'
 import SendLocationModal from '../components/SendLocationModal'
 import CollapsibleSection from '../components/CollapsibleSection'
+import MxcAvatar from '../components/MxcAvatar'
 
 // Migrated (2026-07-20) to MUI as part of the @matrix-widget-toolkit
 // adoption — see main.jsx/widget.js/matrixStore.js for the data-layer half.
@@ -163,9 +164,22 @@ function MarkerSearch({ markers, mapInstance, leafletMarkers }) {
 // effect), so a `zoom` on the label div here nets to the same visual size as
 // the rest of the scaled chrome, letting labels grow with the slider while the
 // map/tiles/marker positions stay at true scale.
-function makeIcon(color, type, label, faded = false, customEmoji = null, scale = 1) {
+// avatarUrl (2026-08-13): a resolved blob: URL for the marker's linked
+// person's/vehicle's own photo (marker.image_mxc, see api.js's markers.list()
+// join, resolved via api.media.url() — see MapBoard's avatarUrls state
+// below). When present it replaces the plain emoji glyph inside the pin's
+// circle with the actual photo, cropped to a circle; the pin shape/color
+// itself is unchanged either way, so team color + faded/highlighted state
+// still read the same at a glance.
+function makeIcon(color, type, label, faded = false, customEmoji = null, scale = 1, avatarUrl = null) {
   const safeLabel = (label || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const opacity = faded ? '0.2' : '1'
+  // Positioned to sit inside the teardrop's circle (svg viewBox "0 0 34 42"
+  // rendered at 40x50 — cx=17,cy=17,r=10 in viewBox coords lands at roughly
+  // (20,20) r≈11.5 on screen once scaled).
+  const avatarHtml = avatarUrl
+    ? `<img src="${avatarUrl}" style="position:absolute;left:8px;top:8px;width:22px;height:22px;border-radius:50%;object-fit:cover;border:1.5px solid rgba(255,255,255,0.7);pointer-events:none;" />`
+    : ''
 
   const labelHtml = `
     <div style="
@@ -208,12 +222,15 @@ function makeIcon(color, type, label, faded = false, customEmoji = null, scale =
   return L.divIcon({
     html: `
       <div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 6px rgba(0,0,0,0.5));opacity:${opacity};transition:opacity 0.3s;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 34 42">
-          <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z"
-            fill="${color}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
-          <circle cx="17" cy="17" r="10" fill="rgba(0,0,0,0.2)"/>
-          <text x="17" y="22" text-anchor="middle" font-size="15" fill="white">${emoji}</text>
-        </svg>
+        <div style="position:relative;width:40px;height:50px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 34 42">
+            <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z"
+              fill="${color}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+            <circle cx="17" cy="17" r="10" fill="rgba(0,0,0,0.2)"/>
+            ${avatarUrl ? '' : `<text x="17" y="22" text-anchor="middle" font-size="15" fill="white">${emoji}</text>`}
+          </svg>
+          ${avatarHtml}
+        </div>
         ${labelHtml}
       </div>`,
     iconSize: [40, 74],
@@ -264,7 +281,16 @@ function makePlacingIcon() {
 // same visual language as makeIcon()'s labelHtml above, just smaller and
 // tinted with the beacon's team color (via `color`) so a live dot reads as
 // "part of" that team's pins/legend rather than a generic marker.
-function makeBeaconIcon(color, label, scale = 1) {
+// avatarUrl (2026-08-13): the sharing person's own photo (person.image_mxc,
+// resolved the same way as makeIcon()'s — see MapBoard's avatarUrls state).
+// Deliberately does NOT replace the pulsing ring or its animation — that's
+// the whole visual signal that this is a LIVE dot, not a placed marker, so
+// it has to survive regardless of whether an avatar is available. The
+// avatar only takes over the small solid inner dot, sized up slightly (16px
+// -> 20px) so the photo actually reads at this scale, with the team-color
+// ring kept as a box-shadow outline since the avatar image would otherwise
+// cover the color swatch entirely.
+function makeBeaconIcon(color, label, scale = 1, avatarUrl = null) {
   const safeLabel = (label || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const labelHtml = label ? `
     <div style="
@@ -290,7 +316,10 @@ function makeBeaconIcon(color, label, scale = 1) {
       <div style="display:flex;flex-direction:column;align-items:center;cursor:pointer;">
         <div style="position:relative;width:28px;height:28px;filter:drop-shadow(0 1px 5px rgba(0,0,0,0.5));">
           <div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.35;animation:cb-beacon-pulse 1.8s ease-out infinite;"></div>
-          <div style="position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:50%;background:${color};border:2.5px solid rgba(255,255,255,0.95);"></div>
+          ${avatarUrl
+            ? `<img src="${avatarUrl}" style="position:absolute;left:4px;top:4px;width:20px;height:20px;border-radius:50%;object-fit:cover;border:2.5px solid rgba(255,255,255,0.95);box-shadow:0 0 0 1.5px ${color};pointer-events:none;" />`
+            : `<div style="position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:50%;background:${color};border:2.5px solid rgba(255,255,255,0.95);"></div>`
+          }
         </div>
         <style>@keyframes cb-beacon-pulse{0%{transform:scale(0.4);opacity:0.6}100%{transform:scale(1.8);opacity:0}}</style>
         ${labelHtml}
@@ -362,6 +391,13 @@ export default function MapBoard() {
   const [vehicles, setVehicles] = useState([])
   const [teams, setTeams] = useState([])
   const [liveLocations, setLiveLocations] = useState([])
+  // mxc:// -> resolved blob: URL, for person/vehicle avatars shown on map
+  // pins (makeIcon), live-location beacons (makeBeaconIcon), and the right
+  // panel's Persons/"Live now" lists (MxcAvatar below). Populated by the
+  // effect below rather than fetched per-render — the same mxc shows up on
+  // both a marker pin and a sidebar row, so this is a shared cache, not
+  // per-component state like MxcAvatar's own internal one.
+  const [avatarUrls, setAvatarUrls] = useState({})
   const [selectedMarker, setSelectedMarker] = useState(null)
   const [locationMarker, setLocationMarker] = useState(null)
   const [showAddModal, setShowAddModal] = useState(false)
@@ -469,6 +505,33 @@ export default function MapBoard() {
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Resolves every distinct image_mxc across persons/vehicles into a
+  // blob: URL and caches it in avatarUrls (declared above), so map pins,
+  // beacons, and the sidebar lists all read off the same cache instead of
+  // each firing their own downloadFile() for the same mxc. Only fetches
+  // mxcs not already in the cache — avatarUrls itself is intentionally NOT
+  // a dependency here (that would re-run the instant it's set, in a loop);
+  // this only needs to react to the person/vehicle rows changing.
+  useEffect(() => {
+    const mxcs = new Set()
+    persons.forEach(p => { if (p.image_mxc) mxcs.add(p.image_mxc) })
+    vehicles.forEach(v => { if (v.image_mxc) mxcs.add(v.image_mxc) })
+    const missing = [...mxcs].filter(mxc => !(mxc in avatarUrls))
+    if (missing.length === 0) return
+    let cancelled = false
+    Promise.all(missing.map(mxc => api.media.url(mxc).then(url => [mxc, url]).catch(() => [mxc, null])))
+      .then(pairs => {
+        if (cancelled) return
+        setAvatarUrls(prev => {
+          const next = { ...prev }
+          pairs.forEach(([mxc, url]) => { next[mxc] = url })
+          return next
+        })
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persons, vehicles])
 
   // "View on map" (Teams.jsx, ?team=<id>) — highlight that team and pan/fit
   // the map to its markers once teams+markers have loaded, then clear the
@@ -618,7 +681,8 @@ export default function MapBoard() {
       const type = marker.entity_type === 'vehicle' ? (marker.vehicle_type || 'car')
         : marker.entity_type === 'misc' ? (marker.vehicle_type || 'misc') : 'person'
       const label = marker.label || ''
-      const icon = makeIcon(color, type, label, faded, null, uiScale)
+      const avatarUrl = marker.image_mxc ? avatarUrls[marker.image_mxc] || null : null
+      const icon = makeIcon(color, type, label, faded, null, uiScale, avatarUrl)
 
       const lm = L.marker([marker.lat, marker.lng], { icon, draggable: !marker.locked, title: label })
 
@@ -713,7 +777,7 @@ export default function MapBoard() {
         })
       })
     }
-  }, [markers, highlightedTeam, teams, mapReady, uiScale])
+  }, [markers, highlightedTeam, teams, mapReady, uiScale, avatarUrls])
 
   // Beacons are keyed by whatever Matrix user_id is doing the sharing —
   // that includes anyone in the room, not just people CrewBoard knows
@@ -757,8 +821,9 @@ export default function MapBoard() {
       if (!latlng) return
       const color = person.team_color || '#4e7fff'
       const label = vehicle ? `${vehicle.make} ${vehicle.model} · ${person.name}` : person.name
+      const avatarUrl = person.image_mxc ? avatarUrls[person.image_mxc] || null : null
 
-      const bm = L.marker(latlng, { icon: makeBeaconIcon(color, label, uiScale), title: `${label} (live location)`, zIndexOffset: 1000 })
+      const bm = L.marker(latlng, { icon: makeBeaconIcon(color, label, uiScale, avatarUrl), title: `${label} (live location)`, zIndexOffset: 1000 })
       const ageMin = beacon.timestamp ? Math.max(0, Math.round((Date.now() - beacon.timestamp) / 60000)) : null
 
       // A beacon isn't a placed DB marker, so build a marker-like object the
@@ -809,7 +874,7 @@ export default function MapBoard() {
       bm.addTo(map)
       beaconMarkers.current[person.id] = bm
     })
-  }, [activeBeacons, mapReady, uiScale])
+  }, [activeBeacons, mapReady, uiScale, avatarUrls])
 
   // Shared style for the "flex:1" action buttons inside popup content
   // (Message/Location, Lock/Unlock, Send, etc). Bug fix (2026-07-27): these
@@ -1107,9 +1172,9 @@ export default function MapBoard() {
                             </Tooltip>
                           }
                         >
-                          <Avatar sx={{ width: 26, height: 26, fontSize: 9, bgcolor: person.team_color ? person.team_color + '25' : 'action.selected', color: person.team_color || 'text.secondary' }}>
+                          <MxcAvatar mxc={person.image_mxc} fetchFn={api.media.url} sx={{ width: 26, height: 26, fontSize: 9, bgcolor: person.team_color ? person.team_color + '25' : 'action.selected', color: person.team_color || 'text.secondary' }}>
                             {person.name.slice(0, 2).toUpperCase()}
-                          </Avatar>
+                          </MxcAvatar>
                         </Badge>
                       </ListItemAvatar>
                       <ListItemText
@@ -1153,9 +1218,9 @@ export default function MapBoard() {
                       </Tooltip>
                     }
                   >
-                    <Avatar sx={{ width: 26, height: 26, fontSize: 9, bgcolor: p.team_color ? p.team_color + '25' : 'action.selected', color: p.team_color || 'text.secondary' }}>
+                    <MxcAvatar mxc={p.image_mxc} fetchFn={api.media.url} sx={{ width: 26, height: 26, fontSize: 9, bgcolor: p.team_color ? p.team_color + '25' : 'action.selected', color: p.team_color || 'text.secondary' }}>
                       {p.name.slice(0, 2).toUpperCase()}
-                    </Avatar>
+                    </MxcAvatar>
                   </Badge>
                 </ListItemAvatar>
                 <ListItemText

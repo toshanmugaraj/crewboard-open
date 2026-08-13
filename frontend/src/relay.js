@@ -131,11 +131,12 @@ export function startRelayHost(matrixStoreFns) {
           result = matrixStoreFns.getRoomKeyMaterial()
           break
         case 'fetchMediaUrl':
-          // Avatars/photos now require an authenticated fetch (this
-          // homeserver has Matrix v1.11 authenticated media enabled — see
-          // matrixStore.js's fetchAuthedMediaUrl()), which needs a real
-          // OpenID token a companion window can't request itself (no Widget
-          // API there). The host does the fetch and hands back a blob: URL.
+          // Avatars/photos go through the Widget API's downloadFile()
+          // (MSC4039's download_file action — see matrixStore.js's
+          // fetchMediaBlob()/fetchAuthedMediaUrl()), which only exists on a
+          // real WidgetApiImpl connection — a companion window has none (no
+          // widgetId/parentUrl to hand-shake with, see this file's header
+          // comment). The host does the download and hands back a raw Blob.
           // BroadcastChannel structured-clones Blob objects fine, so the
           // companion re-wraps the received blob into its OWN object URL
           // (see companionFetchMediaUrl below) — object URLs are only valid

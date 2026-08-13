@@ -42,6 +42,7 @@ import { useToast } from '../components/useToast.jsx'
 import { useConfirm } from '../components/useConfirm.jsx'
 import { roomMatrixToUri, userMatrixToUri } from '../widget.js'
 import { navigateTo } from '../matrixStore.js'
+import MxcAvatar from '../components/MxcAvatar'
 
 // Migrated (2026-07-20) to MUI as part of the @matrix-widget-toolkit
 // adoption — see main.jsx/widget.js/matrixStore.js for the data-layer half.
@@ -130,27 +131,6 @@ function PhotoUpload({ entityType, entityId, currentImageMxc, onUploaded, onErro
         onChange={e => handleFile(e.target.files[0])} />
     </Box>
   )
-}
-
-// ── MXC-backed avatar ────────────────────────────────────────────────────
-// Thin wrapper around MUI's Avatar for the three other places (persons
-// list, vehicles list, directory-search results) that just need "show this
-// mxc:// as an avatar, fall back to children if there isn't one/it fails
-// to load" — same async-fetch requirement as PhotoUpload above (this
-// homeserver requires an authenticated request for media), but without
-// needing PhotoUpload's own upload/drag-drop machinery. Avatar's own
-// image-load-error handling already falls back to children when `src` is
-// null/undefined or fails, so this doesn't need to track failure itself.
-function MxcAvatar({ mxc, fetchFn, children, ...avatarProps }) {
-  const [url, setUrl] = useState(null)
-  useEffect(() => {
-    let cancelled = false
-    setUrl(null)
-    if (!mxc) return
-    fetchFn(mxc).then(u => { if (!cancelled) setUrl(u) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [mxc, fetchFn])
-  return <Avatar src={url || undefined} {...avatarProps}>{children}</Avatar>
 }
 
 // ── Direct Message Modal ──────────────────────────────────────────────────

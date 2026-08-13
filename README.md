@@ -147,3 +147,10 @@ Recipients are addressed by Matrix ID, and everything — direct-style messages,
 ## Further reading
 
 See `implementation_plan.md` and `messaging_architecture_plan.md` for the architecture and migration history, and `CLAUDE.md` for the current, detailed picture of how the frontend/backend/Matrix pieces fit together.
+
+---
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](file:///Users/demo/Documents/Live/crewboard-open/LICENSE) file for details.
+

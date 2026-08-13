@@ -12,7 +12,7 @@ import MatrixHub from './views/MatrixHub'
 import Settings from './views/Settings'
 import { initWidget, widgetApiPromise, fixWidgetName } from './widget.js'
 import { isCompanion, connectCompanion, startRelayHost } from './relay.js'
-import { sendMessage, sendRoomEvent, readInbox, readBeacons, uploadMedia, searchUserDirectory, subscribeState, primeMediaBase, fetchMediaBlob, findDmRoom, listJoinedRooms, getRoomMembers } from './matrixStore.js'
+import { sendMessage, sendRoomEvent, readInbox, readBeacons, uploadMedia, searchUserDirectory, subscribeState, fetchMediaBlob, findDmRoom, listJoinedRooms, getRoomMembers } from './matrixStore.js'
 import { initRoomCrypto, recheckRoomEncryption, startMembershipWatch, getKeyMaterialForRelay } from './roomCrypto.js'
 import { startCommandWatch } from './commands.js'
 import { applyUiScale, getUiScale } from './uiScale.js'
@@ -123,11 +123,6 @@ function WidgetApp() {
   // screen can trigger this exactly the same way the initial load does,
   // without duplicating it.
   function afterCryptoOk() {
-    // Resolve the delegated homeserver base early so mxcToHttp() (sync,
-    // used in render) can build avatar/photo URLs even when the widget
-    // URL carried no baseUrl param. Best-effort, don't block on it.
-    primeMediaBase().catch(() => {})
-
     // Loads the team/person room-link cache used to scope which rooms
     // CrewBoard's own cross-room subscribeState() handlers act on (see
     // relevantRooms.js) — kicked off early so it's populated before Layout/

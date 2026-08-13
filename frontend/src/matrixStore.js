@@ -29,7 +29,7 @@
 //    2026-07-20 "explicit limit" fix in readBeacons() below (that fix is
 //    kept as a comment for history; the toolkit needs no equivalent tuning).
 import { Symbols } from 'matrix-widget-api'
-import { widgetApi, getRoomId, getOpenIdToken, navigateTo as widgetNavigateTo, LOCATION_TAG_STATE_TYPE } from './widget.js'
+import { widgetApi, getRoomId, navigateTo as widgetNavigateTo, LOCATION_TAG_STATE_TYPE } from './widget.js'
 import {
   isCompanion,
   broadcastPush,
@@ -388,27 +388,11 @@ export async function readBeacons() {
 // upload the way the old direct-POST's `?filename=` query param did —
 // acceptable since nothing in this app displays the uploaded filename
 // itself (persons/vehicles just store and redisplay the resulting mxc://
-// URI as an image). getOpenIdToken() is kept around for the still-fetch-based
-// authenticated *download* path below (fetchMediaBlob) — only the upload
-// direction changed.
+// URI as an image). getOpenIdToken() was also kept around for a fetch-based
+// authenticated *download* path (fetchMediaBlob) — that's gone too now, see
+// fetchMediaBlob's own header comment below; both directions go through
+// Element's own session via the Widget API.
 
-// Resolves the ACTUAL homeserver base URL to POST uploads to. This has to be
-// the real, delegated homeserver (e.g. https://matrix.example.org), NOT the
-// bare Matrix server_name (e.g. example.org): the server_name commonly
-// 30x-redirects to the delegated homeserver via .well-known, and an upload is
-// a CORS *preflighted* request (POST + Authorization header) — preflight
-// (OPTIONS) responses are NOT allowed to redirect, so hitting the server_name
-// directly fails with "Redirect is not allowed for a preflight request".
-//
-// Order of preference:
-//   1. the `baseUrl` widget URL param, if the registration passed one
-//      (already the delegated URL, no redirect) — fast path, no extra fetch;
-//   2. otherwise resolve delegation ourselves via
-//      GET https://<server_name>/.well-known/matrix/client (a plain GET, which
-//      CORS *does* allow to redirect, and which Matrix requires to be
-//      served with permissive CORS), and use its m.homeserver.base_url;
-//   3. last resort, the bare server_name — may still redirect, but it's better
-//      than nothing if well-known is missing.
 // Reads a widget URL parameter from EITHER the query string OR the hash
 // fragment. This app uses HashRouter and Element's registered widget URL puts
 // every parameter after the '#' (e.g. https://crewboard.example.org/#/?roomId=...&baseUrl=
@@ -426,84 +410,6 @@ export function getWidgetUrlParam(name) {
     if (hashParams.has(name)) return hashParams.get(name)
   }
   return null
-}
-
-// mxcToHttp() (below) is synchronous and only ever reads cachedHomeserverBase
-// directly — it never awaits resolveHomeserverBase() itself (it can't, it's
-// called from render). That means every path through resolveHomeserverBase()
-// MUST assign to cachedHomeserverBase, including the final bare-server-name
-// fallback — previously that fallback was only ever *returned*, never
-// *cached*, so if the .well-known fetch failed (network hiccup, DNS issue,
-// whatever) cachedHomeserverBase stayed null forever and mxcToHttp() kept
-// returning null for the rest of the session: avatars/photos would show
-// their empty/placeholder state permanently, with no error visible anywhere,
-// because <img src={null}> just quietly renders nothing rather than firing a
-// network request that could be inspected. Found 2026-07-23 via a report of
-// a person's photo showing blank in the list and the edit modal's upload box
-// showing its empty "drag a photo here" placeholder despite image_mxc being
-// correctly set in the database — the placeholder (not a broken-image icon)
-// was the tell: it only renders when mxcToHttp() returns null outright, not
-// when a real request fails.
-let cachedHomeserverBase = null
-
-// Components that computed an avatar/photo URL before resolution finished
-// (or before it fell back) have no way to know cachedHomeserverBase changed,
-// since it's a plain module variable, not React state. Fire a DOM event so
-// they can recompute — see PhotoUpload's/Database.jsx's listeners.
-function notifyMediaBaseReady() {
-  try { window.dispatchEvent(new CustomEvent('crewboard:media-base-ready')) } catch { /* no-op outside a browser */ }
-}
-
-async function resolveHomeserverBase(serverName) {
-  const paramBase = getWidgetUrlParam('baseUrl')
-  if (paramBase) {
-    cachedHomeserverBase = paramBase.replace(/\/+$/, '')
-    notifyMediaBaseReady()
-    return cachedHomeserverBase
-  }
-  if (cachedHomeserverBase) return cachedHomeserverBase
-  try {
-    const res = await fetch(`https://${serverName}/.well-known/matrix/client`)
-    if (res.ok) {
-      const body = await res.json()
-      const base = body?.['m.homeserver']?.base_url
-      if (base) {
-        cachedHomeserverBase = base.replace(/\/+$/, '')
-        notifyMediaBaseReady()
-        return cachedHomeserverBase
-      }
-    }
-  } catch (e) {
-    console.warn('resolveHomeserverBase: .well-known delegation lookup failed, using bare server_name:', e.message)
-  }
-  // Cache the bare-server-name fallback too, not just return it (see comment
-  // above cachedHomeserverBase). A plain <img src> GET isn't CORS-preflighted
-  // the way the media *upload* POST was (see uploadMedia()'s CORS saga) — so
-  // even if this bare hostname 302-redirects to the real delegated
-  // homeserver, the browser will just follow it transparently for a simple
-  // image load. Something is better than a permanently-null cache.
-  cachedHomeserverBase = `https://${serverName}`
-  notifyMediaBaseReady()
-  return cachedHomeserverBase
-}
-
-/** Resolves and caches the real (delegated) homeserver base URL up front, so
- *  the first fetchAuthedMediaUrl() call doesn't have to pay for its own
- *  .well-known lookup even when the widget URL didn't carry a `baseUrl`
- *  param. Best effort; call once after init (see main.jsx). (Historical
- *  note: this used to matter more when avatar URLs were built synchronously
- *  in render via a now-removed mxcToHttp() — that's gone now that media
- *  requires an authenticated fetch, but priming the cache early is still a
- *  small win.) */
-export async function primeMediaBase() {
-  if (cachedHomeserverBase) return cachedHomeserverBase
-  try {
-    const { matrix_server_name } = await getOpenIdToken()
-    return await resolveHomeserverBase(matrix_server_name)
-  } catch (e) {
-    console.warn('primeMediaBase failed (media URLs may be unavailable until an upload runs):', e.message)
-    return null
-  }
 }
 
 export async function uploadMedia(fileOrBlob, filename, contentType) {
@@ -804,31 +710,31 @@ export async function clearLocationTagState(stateKey, roomId) {
   return widgetApi.sendStateEvent(LOCATION_TAG_STATE_TYPE, {}, { roomId: roomId || getRoomId() || undefined, stateKey })
 }
 
-// ── Authenticated media (Matrix v1.11 / MSC3916) ────────────────────────────
-// Superseded the old synchronous mxcToHttp() (2026-07-23). That function
-// built a plain URL string against the legacy `/_matrix/media/v3/thumbnail/
-// ...` endpoint — confirmed LIVE against this homeserver (Synapse 1.156, by
-// exec'ing into the synapse pod and hitting localhost:8008 directly,
-// bypassing all the DNS noise) that this endpoint now returns 404
-// M_NOT_FOUND unconditionally, regardless of width/height. This server has
-// "authenticated media" enabled (Synapse's default since ~1.108) — the
-// legacy unauthenticated endpoints are simply gone for this media. The
-// earlier "switch width 320 → 352" fix was chasing the wrong cause; it
-// happened to look plausible because the failure mode (image just doesn't
-// load) was identical either way.
+// ── Authenticated media (MSC4039 download_file) ─────────────────────────────
+// History: this used to be a synchronous mxcToHttp() building a plain URL
+// string (pre-2026-07-23), then a direct fetch() against
+// `/_matrix/client/v1/media/thumbnail/...` with an unauthenticated-first,
+// OpenID-Bearer-retry-second fallback chain (plus an `allow_redirect=true`
+// query param for federated avatars) once this homeserver turned on Matrix
+// v1.11 "authenticated media" and the legacy unauthenticated thumbnail
+// endpoint started 404ing. That whole chain existed only because the widget
+// has no real Matrix access_token to offer — an OpenID token is minted for
+// federation identity verification (the same thing backend/src/auth.js uses
+// it for), not valid Client-Server API auth, so the Bearer retry was always
+// a best-effort guess, never a guarantee.
 //
-// The replacement, `/_matrix/client/v1/media/thumbnail/...`, does exist
-// (confirmed via a 401 M_MISSING_TOKEN response, not 404) but requires a
-// real `Authorization: Bearer <token>` header — which a browser cannot
-// attach to a plain <img src="...">. So this can no longer be a synchronous
-// "build a URL string" function at all: it has to fetch() with an auth
-// header and hand back a blob: object URL instead.
-//
-// The token reused here is the same OpenID token uploadMedia() already
-// requests via getOpenIdToken() (widgetApi.requestOpenIDConnectToken()) and
-// successfully uses as a Bearer credential against this same homeserver's
-// media API (confirmed working for the upload path) — not a different,
-// unproven token type.
+// Superseded (2026-08-13) by handing the download to Element itself via the
+// Widget API's downloadFile() (MSC4039's download_file action — see
+// widget.js's MSC4039DownloadFile capability), the same move uploadMedia()
+// already made for uploads via uploadFile()/MSC4039UploadFile. Element
+// holds a real access_token, so auth/CORS/federation redirects become its
+// problem, not this widget's. Trade-off accepted: downloadFile() takes only
+// an mxc:// URI — no width/height/method — so this now always fetches the
+// full-resolution original instead of the small server-generated thumbnail
+// the old `/thumbnail/...` endpoint served. `size` stays in these functions'
+// signatures (default 96) purely so relay.js's companion-window RPC and the
+// cache key below don't need touching — nothing here requests a specific
+// size from the server anymore.
 //
 // Cached per `${mxc}:${size}` so repeated renders of the same avatar don't
 // re-fetch/re-decode the image or mint a new blob: URL every time (object
@@ -836,19 +742,9 @@ export async function clearLocationTagState(stateKey, roomId) {
 // re-render often via the live-update listeners in Database.jsx).
 const mediaUrlCache = new Map() // key -> Promise<string | null>
 
-/** Fetches an mxc:// URI as an authenticated thumbnail and resolves to a
- *  `blob:` object URL usable in an <img src>, or null if there's no mxc, no
- *  homeserver base yet, or the fetch fails. Async now (see header comment
- *  above) — callers need a useEffect/useState, not a direct render call;
- *  see Database.jsx's usage.
- *
- *  Default size 96 (not the round-number "352" tried earlier): Synapse only
- *  generates thumbnails at the fixed sizes listed in its own
- *  `thumbnail_sizes` config, not arbitrary requested dimensions — a request
- *  for a size that isn't pre-generated silently gets served the nearest
- *  size the server actually has on disk instead of a dynamic resize.
- *  Confirmed against a real deployment that this server's closest available
- *  size is 96×96, so asking for anything else just wastes a request. */
+/** Resolves an mxc:// URI to a `blob:` object URL usable in an <img src>, or
+ *  null if there's no mxc or the download fails. Async — callers need a
+ *  useEffect/useState, not a direct render call; see Database.jsx's usage. */
 export async function fetchAuthedMediaUrl(mxc, size = 96) {
   if (!mxc || !mxc.startsWith('mxc://')) return null
   const cacheKey = `${mxc}:${size}`
@@ -862,47 +758,23 @@ export async function fetchAuthedMediaUrl(mxc, size = 96) {
 
   mediaUrlCache.set(cacheKey, promise)
   // Don't poison the cache with a failed attempt — a transient network blip
-  // shouldn't permanently blank an avatar for the rest of the session the
-  // way the old cachedHomeserverBase bug did.
+  // shouldn't permanently blank an avatar for the rest of the session.
   promise.catch(() => mediaUrlCache.delete(cacheKey))
   return promise
 }
 
-/** Does the actual authenticated fetch + returns a raw Blob (not a URL) —
- *  used directly by fetchAuthedMediaUrl() in normal widget mode, AND handed
- *  to relay.js's startRelayHost() so a companion window (which has no
- *  Widget API of its own, so can't request an OpenID token) can ask the
- *  host to fetch on its behalf and relay back the Blob (structured-clonable
- *  over BroadcastChannel) — see relay.js's 'fetchMediaUrl' case and
- *  companionFetchMediaUrl(). */
-export async function fetchMediaBlob(mxc, size = 96) {
+/** Does the actual download + returns a raw Blob (not a URL) — used
+ *  directly by fetchAuthedMediaUrl() in normal widget mode, AND handed to
+ *  relay.js's startRelayHost() so a companion window (which has no Widget
+ *  API of its own) can ask the host to download on its behalf and relay
+ *  back the Blob (structured-clonable over BroadcastChannel) — see
+ *  relay.js's 'fetchMediaUrl' case and companionFetchMediaUrl(). */
+export async function fetchMediaBlob(mxc, size = 96) { // eslint-disable-line no-unused-vars -- size kept for signature/cache-key compat, see header comment
   if (!mxc || !mxc.startsWith('mxc://')) return null
-  const { access_token, matrix_server_name } = await getOpenIdToken()
-  const homeserverUrl = getWidgetUrlParam('baseUrl') || await resolveHomeserverBase(matrix_server_name)
-  const path = `/_matrix/client/v1/media/thumbnail/${mxc.slice('mxc://'.length)}`
-  // allow_redirect: lets Synapse redirect straight to the remote homeserver's
-  // own authenticated media endpoint when the mxc:// server-name isn't this
-  // homeserver (e.g. a federated user's avatar) instead of only trying (and
-  // sometimes failing) to proxy-fetch it locally — confirmed necessary
-  // against a real deployment that 404'd on v1/thumbnail without it.
-  const query = new URLSearchParams({ width: String(size), height: String(size), method: 'crop', allow_redirect: 'true' })
-  const url = `${homeserverUrl.replace(/\/+$/, '')}${path}?${query.toString()}`
-
-  // Try unauthenticated first. A widget's OpenID token is NOT a real Matrix
-  // access_token per spec (it's minted for third-party identity
-  // verification — the exact thing backend/src/auth.js uses it for against
-  // the homeserver's federation userinfo endpoint), so a strict/spec-correct
-  // homeserver is right to reject it as media auth. Deployments that serve
-  // media without any auth at all (confirmed on a real production server)
-  // get their thumbnail in one request this way, with no wasted round trip.
-  // Deployments that DO require media auth get a best-effort retry with the
-  // OpenID token below — it isn't guaranteed valid there either, but a
-  // widget has no way to obtain a real access_token, so this is the only
-  // credential available to try.
-  let res = await fetch(url)
-  if (res.status === 401 || res.status === 403) {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${access_token}` } })
-  }
-  if (!res.ok) throw new Error(`Media fetch failed (${res.status})`)
-  return res.blob()
+  const { file } = await widgetApi.downloadFile(mxc)
+  // matrix-widget-api's own typing calls this XMLHttpRequestBodyInit (it's a
+  // Blob in every implementation observed), so wrap defensively rather than
+  // assume — downstream (URL.createObjectURL, BroadcastChannel) needs an
+  // actual Blob either way.
+  return file instanceof Blob ? file : new Blob([file])
 }
