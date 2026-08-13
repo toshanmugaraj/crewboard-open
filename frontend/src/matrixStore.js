@@ -474,9 +474,10 @@ export async function findDmRoom(targetUserId, selfUserId) {
   if (isCompanion) return companionFindDmRoom(targetUserId, selfUserId)
   if (!targetUserId || !selfUserId || targetUserId === selfUserId) return null
 
-  const [members, powerLevels] = await Promise.all([
+  const [members, powerLevels, createEvents] = await Promise.all([
     withTimelineRetry(() => widgetApi.receiveStateEvents('m.room.member', { roomIds: Symbols.AnyRoom })),
     withTimelineRetry(() => widgetApi.receiveStateEvents('m.room.power_levels', { roomIds: Symbols.AnyRoom })),
+    withTimelineRetry(() => widgetApi.receiveStateEvents('m.room.create', { roomIds: Symbols.AnyRoom })),
   ])
 
   // Current room state is one member event per (room, user); a departed user
@@ -507,15 +508,35 @@ export async function findDmRoom(targetUserId, selfUserId) {
     return userId in users ? users[userId] : (content.users_default ?? 0)
   }
 
+  // Build a map of room creators and additional creators
+  const creatorsByRoom = new Map()
+  for (const e of (createEvents || [])) {
+    creatorsByRoom.set(e.room_id, {
+      creator: e.sender || e.content?.creator,
+      additionalCreators: e.content?.additional_creators || []
+    })
+  }
+
   const matches = []
   for (const [roomId, set] of presentByRoom) {
     if (set.size !== 2 || !set.has(selfUserId) || !set.has(targetUserId)) continue
-    if (powerLevelOf(roomId, selfUserId) !== 100 || powerLevelOf(roomId, targetUserId) !== 100) continue
+
+    // Heuristic 1: Both users have power level 100
+    const hasPowerLevelMatch = powerLevelOf(roomId, selfUserId) === 100 && powerLevelOf(roomId, targetUserId) === 100
+
+    // Heuristic 2: Room creator is one user and the other is in additional_creators
+    const creatorInfo = creatorsByRoom.get(roomId)
+    const isCreatorMatch = creatorInfo && (
+      (creatorInfo.creator === selfUserId && creatorInfo.additionalCreators.includes(targetUserId)) ||
+      (creatorInfo.creator === targetUserId && creatorInfo.additionalCreators.includes(selfUserId))
+    )
+
+    if (!hasPowerLevelMatch && !isCreatorMatch) continue
     matches.push(roomId)
   }
   if (matches.length === 0) return null
   // Prefer a room explicitly flagged is_direct if we saw that flag; else just
-  // take the first 2-person, both-power-100 match.
+  // take the first 2-person, valid DM match.
   return matches.find(r => directRooms.has(r)) || matches[0]
 }
 
