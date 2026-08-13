@@ -180,6 +180,19 @@ function buildCapabilities() {
   // needs, and it's the only widget-native upload path that exists.
   caps.push(MatrixCapabilities.MSC4039UploadFile)
 
+  // Symmetric counterpart to MSC4039UploadFile above — lets
+  // matrixStore.js's fetchMediaBlob() hand mxc:// URIs to Element
+  // (org.matrix.msc4039.download_file) instead of the widget making its
+  // own authenticated fetch to the homeserver's media API. Superseded
+  // (2026-08-13) a direct-fetch chain that tried the thumbnail endpoint
+  // unauthenticated, then retried with an OpenID token as a Bearer
+  // credential — the same "OpenID tokens aren't real access_tokens" gap
+  // documented above for uploads applied equally to downloads, so that
+  // retry was never guaranteed to work either. Routing through Element's
+  // own session sidesteps auth, CORS, and federation redirects all at
+  // once. Same experimental/unstable caveat as MSC4039UploadFile.
+  caps.push(MatrixCapabilities.MSC4039DownloadFile)
+
   // Lets CrewBoard ask Element to jump the user to a room or user profile —
   // the escape hatch used when a person/team doesn't have a linked DM/team
   // room yet (see navigateTo() below).

@@ -147,6 +147,17 @@ export const api = {
   // independently on every route; this is purely for UI honesty.
   whoami: () => backend.get('/whoami'),
 
+  // Generic mxc:// → blob: URL resolver. api.persons.imageUrl/
+  // api.vehicles.imageUrl/api.matrix.userAvatarUrl below do the exact same
+  // fetchAuthedMediaUrl() call, just named for their own callers' entity —
+  // this is the one to reach for when the caller doesn't have a specific
+  // entity in hand, e.g. MapBoard.jsx resolving a marker's linked person/
+  // vehicle avatar (could be either) or a live-location beacon's avatar
+  // from one shared call site.
+  media: {
+    url: (mxc) => fetchAuthedMediaUrl(mxc),
+  },
+
   // Export/import the whole room's dataset (teams, persons, vehicles,
   // markers, plus presets/settings) as a single JSON document.
   //
@@ -346,6 +357,11 @@ export const api = {
           vehicle_type: vehicle?.type || m.vehicle_type || null,
           linked_vehicle: person ? vehicles.find(v => String(v.person_id) === String(person.id))?.make : null,
           linked_person: vehicle?.person_id ? personById[String(vehicle.person_id)]?.name : null,
+          // The linked person's/vehicle's own photo (not a secret — see
+          // persons.uploadImage()'s comment above) — lets MapBoard.jsx show
+          // it on the pin itself via api.media.url() instead of the plain
+          // colored teardrop + emoji glyph.
+          image_mxc: person?.image_mxc || vehicle?.image_mxc || null,
         }
       })
     },
