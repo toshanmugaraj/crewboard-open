@@ -6,9 +6,9 @@ Field crew management and dispatch tool. Manage promotional staff and vehicles o
 
 ## Screenshots
 
-| Map board | Team & vehicle roster |
+| Live location | Team & vehicle roster |
 |---|---|
-| ![Map board with live markers](screenshots/marker.jpg) | ![Persons and vehicles roster](screenshots/team.jpg) |
+| ![Live location sharing](screenshots/livelocation.png) | ![Persons and vehicles roster](screenshots/team.jpg) |
 
 ---
 
