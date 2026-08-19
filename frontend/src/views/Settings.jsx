@@ -15,6 +15,7 @@ import {
   DialogContentText,
   DialogActions,
   Tooltip,
+  Collapse,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteIcon from '@mui/icons-material/Delete'
@@ -25,6 +26,7 @@ import UploadIcon from '@mui/icons-material/Upload'
 import SaveAltIcon from '@mui/icons-material/SaveAlt'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import BugReportIcon from '@mui/icons-material/BugReport'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import { api } from '../api'
 import { useToast } from '../components/useToast.jsx'
 import { getRoomId, setFloating } from '../widget.js'
@@ -316,13 +318,37 @@ function DiagnosticsSection({ showToast }) {
   )
 }
 
+// Collapsible section (2026-08-19) — every section starts collapsed on
+// every load of this screen (plain useState, no localStorage) rather than
+// remembering what was open last time, per explicit request; each section
+// toggles independently (not an accordion — opening one doesn't close
+// another). Unlike MapBoard's CollapsibleSection (right panel), this one
+// doesn't need a resizable/scrollable fixed-height box — Settings' own page
+// already scrolls as a whole — so it's just a header click + MUI's Collapse.
 function Section({ title, children }) {
+  const [open, setOpen] = useState(false)
   return (
     <Card variant="outlined" sx={{ mb: 2 }}>
-      <Box sx={{ px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+      <Box
+        onClick={() => setOpen(o => !o)}
+        sx={{
+          px: 2, py: 1.25, borderBottom: open ? 1 : 0, borderColor: 'divider',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          cursor: 'pointer', userSelect: 'none',
+        }}
+      >
         <Typography variant="overline" sx={{ fontSize: 10, fontWeight: 600, color: 'text.secondary' }}>{title}</Typography>
+        <ExpandMoreIcon
+          sx={{
+            fontSize: 18, color: 'text.secondary',
+            transform: open ? 'none' : 'rotate(-90deg)',
+            transition: 'transform 0.15s',
+          }}
+        />
       </Box>
-      {children}
+      <Collapse in={open}>
+        {children}
+      </Collapse>
     </Card>
   )
 }
