@@ -25,6 +25,7 @@ import {
   DialogContentText,
   Slider,
   Stack,
+  IconButton,
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
@@ -32,6 +33,8 @@ import DeleteIcon from '@mui/icons-material/Delete'
 import CameraAltIcon from '@mui/icons-material/CameraAlt'
 import SendIcon from '@mui/icons-material/Send'
 import LocationOnIcon from '@mui/icons-material/LocationOn'
+import VisibilityIcon from '@mui/icons-material/Visibility'
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff'
 import { api } from '../api'
 import { getUiScale, applyUiScale, setUiScale, UI_SCALE_MIN, UI_SCALE_MAX } from '../uiScale.js'
 import { useToast } from '../components/useToast.jsx'
@@ -357,6 +360,16 @@ function hasCoords(m) {
   return m && Number.isFinite(m.lat) && Number.isFinite(m.lng)
 }
 
+// Key used to track "hidden from map" per person/vehicle in the right panel
+// (see hiddenEntities below) — keyed off entity_type+entity_id rather than
+// marker id, since it's a per-person/vehicle display preference that should
+// survive their underlying marker row being deleted and re-placed later.
+function entityKey(entityType, entityId) {
+  return `${entityType}:${entityId}`
+}
+
+const HIDDEN_MARKERS_KEY = 'crewboard-hidden-markers'
+
 function ConfirmDialog({ message, onConfirm, onCancel }) {
   return (
     <Dialog open onClose={onCancel} maxWidth="xs" fullWidth>
@@ -422,6 +435,29 @@ export default function MapBoard() {
   // along with the rest of the chrome.
   const [uiScale, setUiScaleState] = useState(() => getUiScale())
   const { show: showToast, ToastEl } = useToast()
+
+  // Per-person/vehicle "hide from map" toggle set from the right panel — a
+  // purely local declutter preference (not synced to other dispatchers via
+  // the backend, unlike everything else on this board), persisted per
+  // browser the same way CollapsibleSection remembers panel layout.
+  // Doesn't delete or touch the underlying marker row at all; it just skips
+  // adding that marker to the Leaflet map in the render effect below.
+  const [hiddenEntities, setHiddenEntities] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(HIDDEN_MARKERS_KEY) || '[]')
+      return new Set(Array.isArray(saved) ? saved : [])
+    } catch { return new Set() }
+  })
+
+  function toggleHidden(key) {
+    setHiddenEntities(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      localStorage.setItem(HIDDEN_MARKERS_KEY, JSON.stringify([...next]))
+      return next
+    })
+  }
 
   useEffect(() => {
     const el = rootRef.current
@@ -664,6 +700,12 @@ export default function MapBoard() {
         console.warn('MapBoard: skipping marker with missing/invalid coordinates (likely a decrypt-timing race — see hasCoords()):', marker.id)
         return
       }
+      // Right panel's per-person/vehicle show/hide toggle — skip adding this
+      // marker to the map entirely (row still exists in the panel list).
+      if ((marker.entity_type === 'person' || marker.entity_type === 'vehicle') &&
+        hiddenEntities.has(entityKey(marker.entity_type, marker.entity_id))) {
+        return
+      }
       const faded = highlightedTeam !== null && teams.length > 0 && marker.entity_type !== 'misc' &&
         marker.team_name !== teams.find(t => t.id === highlightedTeam)?.name
       // marker.color is the pin color chosen in AddMarkerModal's "Pin color"
@@ -713,22 +755,22 @@ export default function MapBoard() {
       // disabling it is what keeps "select from the list" reliably landing
       // the marker in the middle instead of "usually the middle, sometimes
       // an edge" depending on popup content height.
-      lm.bindPopup(popupContent, { maxWidth: 220, autoPan: false })
-      // Force Leaflet to re-measure the popup once it's actually open. The
-      // content applies its OWN CSS `zoom:${uiScale}` (see buildPopupHTML)
-      // on top of the map container's counter-zoom (the UI-scale effect
-      // above, which zooms the map by 1/scale to cancel the app-wide
-      // zoom on <html> and keep Leaflet's own pixel math sane) — net effect
-      // is the popup renders at the app's chosen scale like the rest of the
-      // chrome. But Leaflet sizes/positions the popup wrapper by measuring
-      // `_contentNode.offsetWidth/offsetHeight` right when it binds/opens,
-      // which can happen before the browser has finished laying out that
-      // stacked zoom (same class of CSS-zoom-vs-JS-measurement mismatch as
-      // the app-wide bottom-inset bug fixed earlier — see uiScale.js) — so
-      // the wrapper can end up sized for the PRE-zoom content and clip or
-      // fail to fit the buttons actually rendered inside it. update() forces
-      // Leaflet to re-measure and re-center/re-size the popup against the
-      // marker after a layout tick.
+      lm.bindPopup(popupContent, { maxWidth: px(220), autoPan: false })
+      // Re-measure the popup once it's actually open. Bug fix (2026-08-19):
+      // this used to be load-bearing — the popup content applied its own
+      // CSS `zoom:${uiScale}` on top of the map container's counter-zoom,
+      // and Leaflet measures `_contentNode.offsetWidth/offsetHeight`
+      // synchronously when it binds/opens, which could race that stacked
+      // zoom settling and lock the wrapper to a stale, too-small pre-zoom
+      // size — visibly, buttons spilling out past the popup's rounded
+      // border. buildPopupHTML() no longer uses CSS `zoom` at all (see its
+      // comment / the `px()` helper below) — every size in the popup is a
+      // literal, already-scaled px value baked into the HTML string up
+      // front, so there's nothing left to asynchronously settle and this
+      // read is correct on the very first synchronous measurement. Kept
+      // anyway as cheap insurance against the map's OWN counter-zoom (set
+      // imperatively outside React, see the uiScale effect above) not yet
+      // having applied if a popup opens in the same tick as mount.
       lm.on('popupopen', () => requestAnimationFrame(() => lm.getPopup()?.update()))
       lm.on('dragend', async (e) => {
         const { lat, lng } = e.target.getLatLng()
@@ -745,18 +787,23 @@ export default function MapBoard() {
       const team = teams.find(t => t.id === highlightedTeam)
       if (!team) return
 
-      // All vehicle markers belonging to this team on the map
+      // All vehicle markers belonging to this team on the map (excluding
+      // ones hidden via the right panel toggle — no point drawing a line to
+      // a pin that isn't actually shown)
       const vehicleMarkers = markers.filter(m =>
         m.entity_type === 'vehicle' &&
         m.team_name === team.name &&
-        hasCoords(m)
+        hasCoords(m) &&
+        !hiddenEntities.has(entityKey(m.entity_type, m.entity_id))
       )
 
-      // All person markers belonging to this team on the map
+      // All person markers belonging to this team on the map (same hidden
+      // exclusion as above)
       const personMarkers = markers.filter(m =>
         m.entity_type === 'person' &&
         m.team_name === team.name &&
-        hasCoords(m)
+        hasCoords(m) &&
+        !hiddenEntities.has(entityKey(m.entity_type, m.entity_id))
       )
 
       // Connect each vehicle to every team member on the map
@@ -777,7 +824,7 @@ export default function MapBoard() {
         })
       })
     }
-  }, [markers, highlightedTeam, teams, mapReady, uiScale, avatarUrls])
+  }, [markers, highlightedTeam, teams, mapReady, uiScale, avatarUrls, hiddenEntities])
 
   // Beacons are keyed by whatever Matrix user_id is doing the sharing —
   // that includes anyone in the room, not just people CrewBoard knows
@@ -845,18 +892,18 @@ export default function MapBoard() {
 
       const popupContent = document.createElement('div')
       popupContent.innerHTML = `
-        <div style="zoom:${uiScale};min-width:190px;max-width:100%;box-sizing:border-box;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:2px;">📍 ${person.name}</div>
-          <div style="font-size:10px;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;gap:5px;">
-            <span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;"></span>
+        <div style="min-width:${px(190)}px;max-width:100%;box-sizing:border-box;">
+          <div style="font-size:${px(14)}px;font-weight:700;margin-bottom:${px(2)}px;">📍 ${person.name}</div>
+          <div style="font-size:${px(10)}px;color:var(--muted);margin-bottom:${px(8)}px;display:flex;align-items:center;gap:${px(5)}px;">
+            <span style="width:${px(8)}px;height:${px(8)}px;border-radius:50%;background:${color};display:inline-block;"></span>
             ${person.team_name || 'Live location'}${ageMin != null ? ` · ${ageMin === 0 ? 'just now' : ageMin + 'm ago'}` : ''}
           </div>
-          ${vehicle ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px;">🚗 ${vehicle.make} ${vehicle.model}${vehicle.license_plate ? ` · ${vehicle.license_plate}` : ''}</div>` : ''}
-          ${person.phone ? `<div style="font-size:12px;color:var(--muted);margin-bottom:4px;">📞 ${person.phone}</div>` : ''}
-          ${person.matrix_id ? `<div style="font-size:11px;color:var(--dim);margin-bottom:4px;">${person.matrix_id}</div>` : ''}
-          <div style="display:flex;gap:5px;margin-top:10px;">
-            ${person.matrix_id ? `<button data-action="message" style="${POPUP_BTN}padding:6px;font-size:11px;border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">💬 Message</button>` : ''}
-            <button data-action="send-location" style="${POPUP_BTN}padding:6px;font-size:11px;border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">📍 Location</button>
+          ${vehicle ? `<div style="font-size:${px(12)}px;color:var(--muted);margin-bottom:${px(4)}px;">🚗 ${vehicle.make} ${vehicle.model}${vehicle.license_plate ? ` · ${vehicle.license_plate}` : ''}</div>` : ''}
+          ${person.phone ? `<div style="font-size:${px(12)}px;color:var(--muted);margin-bottom:${px(4)}px;">📞 ${person.phone}</div>` : ''}
+          ${person.matrix_id ? `<div style="font-size:${px(11)}px;color:var(--dim);margin-bottom:${px(4)}px;">${person.matrix_id}</div>` : ''}
+          <div style="display:flex;gap:${px(5)}px;margin-top:${px(10)}px;">
+            ${person.matrix_id ? `<button data-action="message" style="${popupBtn(11, 6)}border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">💬 Message</button>` : ''}
+            <button data-action="send-location" style="${popupBtn(11, 6)}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">📍 Location</button>
           </div>
         </div>`
       popupContent.addEventListener('click', (e) => {
@@ -867,14 +914,30 @@ export default function MapBoard() {
       })
       // autoPan: false — same fix and same reasoning as the regular marker
       // popups above (see that bindPopup call's comment).
-      bm.bindPopup(popupContent, { maxWidth: 260, autoPan: false })
-      // Same fix as the regular marker popups above — force a re-measure
-      // once actually open so the wrapper sizes to fit the zoomed content.
+      bm.bindPopup(popupContent, { maxWidth: px(260), autoPan: false })
+      // Same insurance as the regular marker popups above — see that
+      // `popupopen` comment for why this is no longer load-bearing now that
+      // sizing is baked in as literal px rather than a nested CSS zoom.
       bm.on('popupopen', () => requestAnimationFrame(() => bm.getPopup()?.update()))
       bm.addTo(map)
       beaconMarkers.current[person.id] = bm
     })
   }, [activeBeacons, mapReady, uiScale, avatarUrls])
+
+  // Popup content scales with the interface-size setting (uiScale) via
+  // literal, pre-computed px values baked into the HTML string below — NOT
+  // CSS `zoom`. Bug fix (2026-08-19): the popup used to sit inside a THIRD
+  // nested zoom context (the app-wide zoom on <html> × the map container's
+  // own counter-zoom × this popup's own `zoom:${uiScale}`), and Leaflet
+  // measures the popup's rendered width synchronously the instant it opens
+  // — a race against that stacked zoom actually finishing layout that
+  // occasionally lost, locking the popup wrapper to a stale pre-zoom width
+  // while the (correctly larger) zoomed content painted past its edges —
+  // see the `popupopen` comment above. Baking `uiScale` into literal
+  // font-size/padding/gap numbers up front instead means the popup's DOM
+  // is correctly sized on its very first layout pass, with no separate
+  // zoom step left to race at all.
+  const px = (n) => Math.round(n * uiScale)
 
   // Shared style for the "flex:1" action buttons inside popup content
   // (Message/Location, Lock/Unlock, Send, etc). Bug fix (2026-07-27): these
@@ -882,19 +945,25 @@ export default function MapBoard() {
   // `min-width:auto`, meaning a button won't shrink below its own text's
   // natural width no matter how little room the row actually has. With two+
   // buttons whose combined natural width exceeds the popup's own maxWidth
-  // (a fixed 220/260px passed to bindPopup below), the row simply overflowed
-  // past the popup's rounded border instead of shrinking to fit — visibly,
-  // the rightmost button (e.g. "📍 Location") floated outside the dark
-  // popup box entirely. `min-width:0` lets flex items actually shrink;
-  // `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`
-  // truncates gracefully instead of wrapping/clipping mid-glyph if a button
-  // still doesn't have quite enough room at very small UI-scale settings.
-  const POPUP_BTN = 'flex:1;min-width:0;box-sizing:border-box;padding:5px;border-radius:6px;font-size:10px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+  // (passed to bindPopup above), the row simply overflowed past the
+  // popup's rounded border instead of shrinking to fit — visibly, the
+  // rightmost button floated outside the dark popup box entirely.
+  // `min-width:0` lets flex items actually shrink; `overflow:hidden` +
+  // `text-overflow:ellipsis` + `white-space:nowrap` truncates gracefully
+  // instead of wrapping/clipping mid-glyph if a button still doesn't have
+  // quite enough room at very small UI-scale settings.
+  function popupBtn(fontSize = 10, padding = 5) {
+    return `flex:1;min-width:0;box-sizing:border-box;padding:${px(padding)}px;border-radius:${px(6)}px;font-size:${px(fontSize)}px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
+  }
+
+  // Delete "✕" button — flex:0 1 auto (shrink allowed) + min-width:0 so it
+  // can truncate/compress too rather than being pinned to a fixed width
+  // that pokes out past the popup border if a row ever gets tight.
+  function popupDeleteBtn() {
+    return `flex:0 1 auto;min-width:0;box-sizing:border-box;overflow:hidden;padding:${px(5)}px ${px(8)}px;border-radius:${px(6)}px;border:1px solid var(--danger-border);background:var(--danger-bg);color:var(--danger);font-size:${px(10)}px;cursor:pointer;`
+  }
 
   function buildPopupHTML(m) {
-    // zoom scales the whole popup (text + buttons + padding) with the
-    // interface-size setting, so it grows as a unit like the rest of the chrome
-    // rather than just enlarging text inside fixed-size boxes.
     if (m.entity_type === 'misc') {
       // vehicle_type set = tagged via vehicleCommands.js's \car/\motorcycle
       // command, not a manually-dropped POI pin.
@@ -902,44 +971,44 @@ export default function MapBoard() {
         ? `Shared location · tagged ${m.vehicle_type}`
         : 'Point of interest'
       return `
-        <div style="zoom:${uiScale};min-width:180px;max-width:100%;box-sizing:border-box;">
-          <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${m.vehicle_type ? (m.vehicle_type === 'motorcycle' ? '🏍' : '🚗') : '📍'} ${m.label || '—'}</div>
-          <div style="font-size:10px;color:var(--muted);margin-bottom:8px;">${subtitle}</div>
-          ${m.note ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;">${m.note}</div>` : ''}
-          <div style="display:flex;gap:5px;margin-top:10px;">
-            <button data-action="send-location" style="${POPUP_BTN}border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">📍 Send</button>
-            <button data-action="toggle-lock" style="${POPUP_BTN}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">
-              ${m.locked ? '🔓 Unlock' : '🔒 Lock'}
+        <div style="min-width:${px(180)}px;max-width:100%;box-sizing:border-box;">
+          <div style="font-size:${px(13)}px;font-weight:600;margin-bottom:${px(2)}px;">${m.vehicle_type ? (m.vehicle_type === 'motorcycle' ? '🏍' : '🚗') : '📍'} ${m.label || '—'}</div>
+          <div style="font-size:${px(10)}px;color:var(--muted);margin-bottom:${px(8)}px;">${subtitle}</div>
+          ${m.note ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(8)}px;line-height:1.5;">${m.note}</div>` : ''}
+          <div style="display:flex;gap:${px(5)}px;margin-top:${px(10)}px;">
+            <button data-action="send-location" title="Send location" style="${popupBtn()}border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">📍</button>
+            <button data-action="toggle-lock" title="${m.locked ? 'Unlock' : 'Lock'}" style="${popupBtn()}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">
+              ${m.locked ? '🔓' : '🔒'}
             </button>
-            <button data-action="delete" style="flex:0 0 auto;padding:5px 8px;border-radius:6px;border:1px solid var(--danger-border);background:var(--danger-bg);color:var(--danger);font-size:10px;cursor:pointer;">✕</button>
+            <button data-action="delete" style="${popupDeleteBtn()}">✕</button>
           </div>
-          <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--dim);">
+          <div style="margin-top:${px(8)}px;padding-top:${px(8)}px;border-top:1px solid var(--border);font-size:${px(10)}px;color:var(--dim);">
             ${m.locked ? '🔒 Locked — click Unlock to reposition' : '🔓 Unlocked — drag to reposition'}
           </div>
         </div>`
     }
     return `
-      <div style="zoom:${uiScale};min-width:180px;max-width:100%;box-sizing:border-box;">
-        <div style="font-size:13px;font-weight:600;margin-bottom:2px;">${m.label || '—'}</div>
-        <div style="font-size:10px;color:var(--muted);margin-bottom:8px;display:flex;align-items:center;gap:5px;">
-          ${m.team_name ? `<span style="width:7px;height:7px;border-radius:50%;background:${m.team_color};display:inline-block;"></span>${m.team_name}` : 'Unassigned'}
+      <div style="min-width:${px(180)}px;max-width:100%;box-sizing:border-box;">
+        <div style="font-size:${px(13)}px;font-weight:600;margin-bottom:${px(2)}px;">${m.label || '—'}</div>
+        <div style="font-size:${px(10)}px;color:var(--muted);margin-bottom:${px(8)}px;display:flex;align-items:center;gap:${px(5)}px;">
+          ${m.team_name ? `<span style="width:${px(7)}px;height:${px(7)}px;border-radius:50%;background:${m.team_color};display:inline-block;"></span>${m.team_name}` : 'Unassigned'}
         </div>
-        ${m.phone ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">📞 ${m.phone}</div>` : ''}
-        ${m.license_plate ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">🪪 ${m.license_plate}</div>` : ''}
-        ${m.linked_vehicle ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">🚗 ${m.linked_vehicle}</div>` : ''}
-        ${m.linked_person ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">👤 ${m.linked_person}</div>` : ''}
-        ${m.note ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;">${m.note}</div>` : ''}
-        <div style="display:flex;gap:5px;margin-top:10px;">
-          ${m.matrix_id ? `<button data-action="message" style="${POPUP_BTN}border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">💬 Message</button>` : ''}
-          <button data-action="send-location" style="${POPUP_BTN}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">📍 Location</button>
+        ${m.phone ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(4)}px;">📞 ${m.phone}</div>` : ''}
+        ${m.license_plate ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(4)}px;">🪪 ${m.license_plate}</div>` : ''}
+        ${m.linked_vehicle ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(4)}px;">🚗 ${m.linked_vehicle}</div>` : ''}
+        ${m.linked_person ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(4)}px;">👤 ${m.linked_person}</div>` : ''}
+        ${m.note ? `<div style="font-size:${px(11)}px;color:var(--muted);margin-bottom:${px(8)}px;line-height:1.5;">${m.note}</div>` : ''}
+        <div style="display:flex;gap:${px(5)}px;margin-top:${px(10)}px;">
+          ${m.matrix_id ? `<button data-action="message" title="Message" style="${popupBtn()}border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);">💬</button>` : ''}
+          <button data-action="send-location" title="Send location" style="${popupBtn()}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">📍</button>
         </div>
-        <div style="display:flex;gap:5px;margin-top:5px;">
-          <button data-action="toggle-lock" style="${POPUP_BTN}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">
-            ${m.locked ? '🔓 Unlock' : '🔒 Lock'}
+        <div style="display:flex;gap:${px(5)}px;margin-top:${px(5)}px;">
+          <button data-action="toggle-lock" title="${m.locked ? 'Unlock' : 'Lock'}" style="${popupBtn()}border:1px solid var(--border2);background:var(--surface3);color:var(--muted);">
+            ${m.locked ? '🔓' : '🔒'}
           </button>
-          <button data-action="delete" style="flex:0 0 auto;padding:5px 8px;border-radius:6px;border:1px solid var(--danger-border);background:var(--danger-bg);color:var(--danger);font-size:10px;cursor:pointer;">✕</button>
+          <button data-action="delete" style="${popupDeleteBtn()}">✕</button>
         </div>
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;color:var(--dim);">
+        <div style="margin-top:${px(8)}px;padding-top:${px(8)}px;border-top:1px solid var(--border);font-size:${px(10)}px;color:var(--dim);">
           ${m.locked ? '🔒 Locked — click Unlock to reposition' : '🔓 Unlocked — drag to reposition'}
         </div>
       </div>`
@@ -1202,6 +1271,12 @@ export default function MapBoard() {
                 onClick={() => {
                   const marker = markers.find(m => m.entity_type === 'person' && m.entity_id === p.id)
                   if (marker && hasCoords(marker) && mapInstance.current) {
+                    const key = entityKey('person', p.id)
+                    // Jumping to a hidden marker un-hides it too, rather than
+                    // panning to an empty spot on the map — the popup itself
+                    // may not open on this exact click since the marker only
+                    // gets (re)added to the map on the next render.
+                    if (hiddenEntities.has(key)) toggleHidden(key)
                     mapInstance.current.setView([marker.lat, marker.lng], 17, { animate: true })
                     leafletMarkers.current[marker.id]?.openPopup()
                   }
@@ -1229,6 +1304,19 @@ export default function MapBoard() {
                   primaryTypographyProps={{ fontSize: 12, fontWeight: 500, noWrap: true }}
                   secondaryTypographyProps={{ fontSize: 10 }}
                 />
+                {placedPersonIds.has(p.id) && (
+                  <Tooltip title={hiddenEntities.has(entityKey('person', p.id)) ? 'Show on map' : 'Hide from map'}>
+                    <IconButton
+                      size="small"
+                      onClick={(e) => { e.stopPropagation(); toggleHidden(entityKey('person', p.id)) }}
+                      sx={{ p: 0.25, mr: 0.25 }}
+                    >
+                      {hiddenEntities.has(entityKey('person', p.id))
+                        ? <VisibilityOffIcon sx={{ fontSize: 15, color: 'text.disabled' }} />
+                        : <VisibilityIcon sx={{ fontSize: 15, color: 'text.secondary' }} />}
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: placedPersonIds.has(p.id) ? 'success.main' : 'action.disabled', flexShrink: 0 }} />
               </ListItemButton>
             ))}
@@ -1247,6 +1335,8 @@ export default function MapBoard() {
                 onClick={() => {
                   const marker = markers.find(m => m.entity_type === 'vehicle' && m.entity_id === v.id)
                   if (marker && hasCoords(marker) && mapInstance.current) {
+                    const key = entityKey('vehicle', v.id)
+                    if (hiddenEntities.has(key)) toggleHidden(key)
                     mapInstance.current.setView([marker.lat, marker.lng], 17, { animate: true })
                     leafletMarkers.current[marker.id]?.openPopup()
                   }
@@ -1263,6 +1353,19 @@ export default function MapBoard() {
                   primaryTypographyProps={{ fontSize: 12, fontWeight: 500, noWrap: true }}
                   secondaryTypographyProps={{ fontSize: 10 }}
                 />
+                {placedVehicleIds.has(v.id) && (
+                  <Tooltip title={hiddenEntities.has(entityKey('vehicle', v.id)) ? 'Show on map' : 'Hide from map'}>
+                    <IconButton
+                      size="small"
+                      onClick={(e) => { e.stopPropagation(); toggleHidden(entityKey('vehicle', v.id)) }}
+                      sx={{ p: 0.25, mr: 0.25 }}
+                    >
+                      {hiddenEntities.has(entityKey('vehicle', v.id))
+                        ? <VisibilityOffIcon sx={{ fontSize: 15, color: 'text.disabled' }} />
+                        : <VisibilityIcon sx={{ fontSize: 15, color: 'text.secondary' }} />}
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: placedVehicleIds.has(v.id) ? 'success.main' : 'action.disabled', flexShrink: 0 }} />
               </ListItemButton>
             ))}

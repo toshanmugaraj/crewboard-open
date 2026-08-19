@@ -129,6 +129,15 @@ function buildCapabilities() {
   caps.push(WidgetEventCapability.forStateEvent(EventDirection.Receive, 'm.room.encryption').raw)
   caps.push(WidgetEventCapability.forStateEvent(EventDirection.Receive, 'm.room.member').raw)
   caps.push(WidgetEventCapability.forStateEvent(EventDirection.Receive, 'm.room.power_levels').raw)
+  // m.room.create: read across AnyRoom by matrixStore.js's findDmRoom() to
+  // check room creator/additional_creators as a second DM-detection
+  // heuristic alongside the power-level-100 check above. Missing this
+  // capability is what caused "cannot read this kind of state events" —
+  // Element rejects receiveStateEvents() for any type not requested here,
+  // and since findDmRoom() awaits all three reads via Promise.all, that
+  // rejection took down the power-level/member reads too, not just the new
+  // creator check.
+  caps.push(WidgetEventCapability.forStateEvent(EventDirection.Receive, 'm.room.create').raw)
   // m.room.name / m.room.canonical_alias: read across AnyRoom to enumerate the
   // rooms the dispatcher is joined to for the team broadcast-room PICKER
   // (Teams.jsx) — so an admin can pick an existing room instead of pasting a

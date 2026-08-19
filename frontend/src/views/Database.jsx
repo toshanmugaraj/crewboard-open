@@ -420,7 +420,7 @@ function UserDirectorySearch({ onPick }) {
 }
 
 // ── Person Modal ──────────────────────────────────────────────────────────
-function PersonModal({ person, teams, vehicles, onSave, onClose, onError }) {
+function PersonModal({ person, teams, vehicles, persons, onSave, onClose, onError }) {
   const [name, setName] = useState(person?.name || '')
   const [phone, setPhone] = useState(person?.phone || '')
   const [matrixId, setMatrixId] = useState(person?.matrix_id || '')
@@ -440,6 +440,26 @@ function PersonModal({ person, teams, vehicles, onSave, onClose, onError }) {
   useEffect(() => {
     api.whoami().then(me => setSelfUserId(me.user_id)).catch(() => {})
   }, [])
+
+  // Duplicate-matrix_id guard (2026-08-19). matrix_id is one of the
+  // client-encrypted fields (see CLAUDE.md — AES-GCM, random nonce per
+  // write) so the ciphertext the backend stores is never the same twice
+  // for the same plaintext id; there's no way to enforce this with a
+  // Postgres UNIQUE constraint or any other server-side check. This has to
+  // be a client-side comparison against the already-decrypted `persons`
+  // list this room's widget already has in memory. Best-effort by nature
+  // (two dispatchers saving the same id in the same instant can still both
+  // slip through — same trade-off as everything else in this app that
+  // isn't power-level-gated at the DB layer), but it stops the common case
+  // of someone re-adding a person who's already in the roster.
+  const normalizedMatrixId = matrixId.trim().toLowerCase()
+  const duplicatePerson = normalizedMatrixId
+    ? (persons || []).find(p =>
+        p.matrix_id &&
+        p.matrix_id.trim().toLowerCase() === normalizedMatrixId &&
+        String(p.id) !== String(person?.id)
+      )
+    : null
 
   // Read-only — a vehicle is linked to a person from the Vehicle form (its
   // person_id), not the other way around, so this is purely informational:
@@ -491,6 +511,7 @@ function PersonModal({ person, teams, vehicles, onSave, onClose, onError }) {
 
   async function handleSave() {
     if (!name.trim()) return
+    if (duplicatePerson) { onError?.(`${duplicatePerson.name} is already using this Matrix ID`); return }
     try {
       // image_mxc included here (not just left to PhotoUpload's own
       // upload-triggered api.persons.uploadImage() call) because that path
@@ -536,7 +557,9 @@ function PersonModal({ person, teams, vehicles, onSave, onClose, onError }) {
 
         <Stack spacing={2}>
           <TextField label="Name" value={name} onChange={e => setName(e.target.value)} placeholder="Ahmed Khalil" fullWidth size="small" />
-          <TextField label="Matrix ID" value={matrixId} onChange={e => setMatrixId(e.target.value)} placeholder="@ahmed:yourcompany.com" fullWidth size="small" inputProps={{ dir: 'ltr' }} />
+          <TextField label="Matrix ID" value={matrixId} onChange={e => setMatrixId(e.target.value)} placeholder="@ahmed:yourcompany.com" fullWidth size="small" inputProps={{ dir: 'ltr' }}
+            error={!!duplicatePerson}
+            helperText={duplicatePerson ? `Already used by ${duplicatePerson.name}` : ' '} />
           <TextField label="Phone number (optional)" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+973 3600 0001" fullWidth size="small" inputProps={{ dir: 'ltr' }} />
 
           <Box>
@@ -634,7 +657,7 @@ function PersonModal({ person, teams, vehicles, onSave, onClose, onError }) {
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" startIcon={<CheckIcon fontSize="small" />} onClick={handleSave} disabled={!name.trim()}>
+        <Button variant="contained" startIcon={<CheckIcon fontSize="small" />} onClick={handleSave} disabled={!name.trim() || !!duplicatePerson}>
           {person ? 'Save changes' : 'Add person'}
         </Button>
       </DialogActions>
@@ -1293,6 +1316,7 @@ export default function Database() {
           person={editPerson}
           teams={teams}
           vehicles={vehicles}
+          persons={persons}
           onSave={async ({ oldTeamId, newTeamId } = {}) => {
             const wasEditing = !!editPerson
             await load(); setShowNewPerson(false); setEditPerson(null)

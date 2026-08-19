@@ -14,5 +14,9 @@ export default defineConfig({
     // you see in Sources. Safe for this app: no backend, nothing secret in
     // the source that isn't already visible in the bundle itself.
     sourcemap: true
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom'
   }
 })
