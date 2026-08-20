@@ -59,15 +59,23 @@ import MxcAvatar from '../components/MxcAvatar'
 // MarkerSearch below — searches only the markers already loaded on this
 // board, no external network call at all.
 
+// Public OpenStreetMap tile server by default — free, no API key, but
+// rate-limited and not intended for heavy production traffic (see the OSM
+// Tile Usage Policy). crewboard-open keeps this as the default so the
+// project works out of the box with no config. A real deployment can point
+// this at a self-hosted tile server (e.g. TileServer GL / OpenMapTiles) or
+// a paid provider instead, without forking this file, via
+// MAP_TILE_URL/MAP_TILE_ATTRIBUTION — same runtime-config mechanism
+// analytics.js's PLAUSIBLE_* vars use (window.__CREWBOARD_ENV__, templated
+// at container startup by docker-entrypoint.d/40-generate-env-js.sh — see
+// frontend/public/env.js). Falls back to the OSS default whenever either is
+// unset/empty, which is always true for `npm run dev` and for this repo's
+// own default container config.
+const runtimeEnv = (typeof window !== 'undefined' && window.__CREWBOARD_ENV__) || {}
 const TILES = {
   street: {
-    // Public OpenStreetMap tile server — free, no API key, but rate-limited
-    // and not intended for heavy production traffic (see the OSM Tile Usage
-    // Policy). For a real deployment, point this at your own tile server
-    // (e.g. a self-hosted TileServer GL / OpenMapTiles instance) or a paid
-    // provider instead.
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attr: '© OpenStreetMap contributors'
+    url: runtimeEnv.MAP_TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attr: runtimeEnv.MAP_TILE_ATTRIBUTION || '© OpenStreetMap contributors'
   }
 }
 
