@@ -10,11 +10,12 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
   <!-- Runtime config (2026-08-06) — window.__CREWBOARD_ENV__, templated by the
        production container's entrypoint from PLAUSIBLE_API_HOST/
-       PLAUSIBLE_DOMAIN env vars (see /docker-entrypoint.d/40-generate-env-js.sh
-       and analytics.js). Must load BEFORE the main bundle so it's already
-       defined when analytics.js's getConfig() runs. public/env.js ships an
-       empty-values placeholder for local dev/build, so this is always
-       present even outside a container. -->
+       PLAUSIBLE_DOMAIN/MAP_TILE_URL/MAP_TILE_ATTRIBUTION env vars (see
+       /docker-entrypoint.d/40-generate-env-js.sh, analytics.js and
+       MapBoard.jsx). Must load BEFORE the main bundle so it's already
+       defined when analytics.js's getConfig() / MapBoard.jsx's tile config
+       run. public/env.js ships an empty-values placeholder for local
+       dev/build, so this is always present even outside a container. -->
   <script src="/env.js"></script>
 </head>
 <body>

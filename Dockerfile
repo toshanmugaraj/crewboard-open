@@ -19,9 +19,10 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Runtime config injection (2026-08-06) — templates env.js (window.
-# __CREWBOARD_ENV__, currently just PLAUSIBLE_API_HOST/PLAUSIBLE_DOMAIN) from
-# container env vars at startup, so docker-compose's .env file can configure
-# Plausible analytics without an image rebuild. See the script's own header
+# __CREWBOARD_ENV__: PLAUSIBLE_API_HOST/PLAUSIBLE_DOMAIN, plus MAP_TILE_URL/
+# MAP_TILE_ATTRIBUTION for a custom tile server) from container env vars at
+# startup, so docker-compose's .env file can configure Plausible analytics
+# and/or map tiles without an image rebuild. See the script's own header
 # comment and analytics.js for the full design. The base image already runs
 # every script under /docker-entrypoint.d/ before exec-ing nginx.
 COPY docker-entrypoint.d/40-generate-env-js.sh /docker-entrypoint.d/40-generate-env-js.sh

@@ -125,6 +125,11 @@ services:
       # room id and/or user id — see analytics.js's header comment.
       PLAUSIBLE_API_HOST: ${PLAUSIBLE_API_HOST:-}
       PLAUSIBLE_DOMAIN: ${PLAUSIBLE_DOMAIN:-}
+      # Optional custom map tile server — same runtime-config mechanism as
+      # PLAUSIBLE_* above. Both left unset = the public OpenStreetMap tile
+      # server (see MapBoard.jsx's TILES / .env.example for details).
+      MAP_TILE_URL: ${MAP_TILE_URL:-}
+      MAP_TILE_ATTRIBUTION: ${MAP_TILE_ATTRIBUTION:-}
     networks:
       - traefik
     labels:
